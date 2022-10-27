@@ -17,8 +17,11 @@
 
 package org.apache.seatunnel.flink;
 
+import static org.apache.flink.configuration.ConfigOptions.key;
+
 import org.apache.seatunnel.apis.base.env.RuntimeEnv;
 import org.apache.seatunnel.common.config.CheckResult;
+import org.apache.seatunnel.common.constants.CollectionConstants;
 import org.apache.seatunnel.common.constants.JobMode;
 import org.apache.seatunnel.common.utils.ReflectionUtils;
 import org.apache.seatunnel.flink.util.ConfigKeyName;
@@ -29,6 +32,7 @@ import org.apache.seatunnel.shade.com.typesafe.config.Config;
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.api.common.time.Time;
 import org.apache.flink.api.java.ExecutionEnvironment;
+import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.PipelineOptions;
 import org.apache.flink.contrib.streaming.state.RocksDBStateBackend;
@@ -47,6 +51,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.URL;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -126,8 +131,8 @@ public class FlinkEnvironment implements RuntimeEnv {
         List<Configuration> configurations = new ArrayList<>();
         try {
             configurations.add((Configuration) Objects.requireNonNull(ReflectionUtils.getDeclaredMethod(StreamExecutionEnvironment.class,
-                    "getConfiguration")).orElseThrow(() -> new RuntimeException("can't find " +
-                    "method: getConfiguration")).invoke(this.environment));
+                "getConfiguration")).orElseThrow(() -> new RuntimeException("can't find " +
+                "method: getConfiguration")).invoke(this.environment));
             if (!isStreaming()) {
                 configurations.add(batchEnvironment.getConfiguration());
             }
@@ -161,9 +166,9 @@ public class FlinkEnvironment implements RuntimeEnv {
     private void createStreamTableEnvironment() {
         // use blink and streammode
         EnvironmentSettings.Builder envBuilder = EnvironmentSettings.newInstance()
-                .inStreamingMode();
+            .inStreamingMode();
         if (this.config.hasPath(ConfigKeyName.PLANNER) && "blink"
-                .equals(this.config.getString(ConfigKeyName.PLANNER))) {
+            .equals(this.config.getString(ConfigKeyName.PLANNER))) {
             envBuilder.useBlinkPlanner();
         } else {
             envBuilder.useOldPlanner();
@@ -173,7 +178,7 @@ public class FlinkEnvironment implements RuntimeEnv {
         tableEnvironment = StreamTableEnvironment.create(getStreamExecutionEnvironment(), environmentSettings);
         TableConfig config = tableEnvironment.getConfig();
         if (this.config.hasPath(ConfigKeyName.MAX_STATE_RETENTION_TIME) && this.config
-                .hasPath(ConfigKeyName.MIN_STATE_RETENTION_TIME)) {
+            .hasPath(ConfigKeyName.MIN_STATE_RETENTION_TIME)) {
             long max = this.config.getLong(ConfigKeyName.MAX_STATE_RETENTION_TIME);
             long min = this.config.getLong(ConfigKeyName.MIN_STATE_RETENTION_TIME);
             config.setIdleStateRetentionTime(Time.seconds(min), Time.seconds(max));
@@ -181,7 +186,7 @@ public class FlinkEnvironment implements RuntimeEnv {
     }
 
     private void createStreamEnvironment() {
-        environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment = creatMetricEnvironment();
         setTimeCharacteristic();
 
         setCheckpoint();
@@ -244,8 +249,8 @@ public class FlinkEnvironment implements RuntimeEnv {
                     break;
                 default:
                     LOGGER.warn(
-                            "set time-characteristic failed, unknown time-characteristic [{}],only support event-time,ingestion-time,processing-time",
-                            timeType);
+                        "set time-characteristic failed, unknown time-characteristic [{}],only support event-time,ingestion-time,processing-time",
+                        timeType);
                     break;
             }
         }
@@ -268,8 +273,8 @@ public class FlinkEnvironment implements RuntimeEnv {
                         break;
                     default:
                         LOGGER.warn(
-                                "set checkpoint.mode failed, unknown checkpoint.mode [{}],only support exactly-once,at-least-once",
-                                mode);
+                            "set checkpoint.mode failed, unknown checkpoint.mode [{}],only support exactly-once,at-least-once",
+                            mode);
                         break;
                 }
             }
@@ -302,10 +307,10 @@ public class FlinkEnvironment implements RuntimeEnv {
                 boolean cleanup = config.getBoolean(ConfigKeyName.CHECKPOINT_CLEANUP_MODE);
                 if (cleanup) {
                     checkpointConfig.enableExternalizedCheckpoints(
-                            CheckpointConfig.ExternalizedCheckpointCleanup.DELETE_ON_CANCELLATION);
+                        CheckpointConfig.ExternalizedCheckpointCleanup.DELETE_ON_CANCELLATION);
                 } else {
                     checkpointConfig.enableExternalizedCheckpoints(
-                            CheckpointConfig.ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION);
+                        CheckpointConfig.ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION);
 
                 }
             }
@@ -320,6 +325,73 @@ public class FlinkEnvironment implements RuntimeEnv {
                 checkpointConfig.setTolerableCheckpointFailureNumber(failNum);
             }
         }
+    }
+
+    public StreamExecutionEnvironment creatMetricEnvironment() {
+
+        if (!config.hasPath(CollectionConstants.METRICS_CLASS)) {
+            return StreamExecutionEnvironment.getExecutionEnvironment();
+        }
+
+        Configuration seatunnelReporter = initMetricConfig();
+
+        return StreamExecutionEnvironment.getExecutionEnvironment(seatunnelReporter);
+
+    }
+
+    private Configuration initMetricConfig() {
+        final int defaultDuration = 10;
+        //Build flink-metrics parameters
+        ConfigOption<String> reportersList =
+            key("metrics.reporters")
+                .stringType()
+                .noDefaultValue();
+
+        ConfigOption<String> reporterClass =
+            key("metrics.reporter.seatunnel_reporter.class")
+                .stringType()
+                .noDefaultValue();
+        ConfigOption<Duration> reporterInterval =
+            key("metrics.reporter.seatunnel_reporter.interval")
+                .durationType()
+                .defaultValue(Duration.ofSeconds(defaultDuration));
+
+        ConfigOption<String> reporterConfigPort =
+            key("metrics.reporter.seatunnel_reporter.port")
+                .stringType()
+                .noDefaultValue();
+        ConfigOption<String> reporterConfigHost =
+            key("metrics.reporter.seatunnel_reporter.host")
+                .stringType()
+                .noDefaultValue();
+        ConfigOption<String> reporterConfigJobName =
+            key("metrics.reporter.seatunnel_reporter.jobName")
+                .stringType()
+                .noDefaultValue();
+        ConfigOption<String> reporterConfigReporterName =
+                key("metrics.reporter.seatunnel_reporter.reporterName")
+                        .stringType()
+                        .noDefaultValue();
+
+        Configuration seatunnelReporter = new Configuration().set(reportersList, "seatunnel_reporter").set(reporterClass, "org.apache.seatunnel.metrics.flink.SeatunnelMetricReporter");
+        if (config.hasPath(CollectionConstants.METRICS_INTERVAL)) {
+            Duration duration = Duration.ofSeconds(config.getLong(CollectionConstants.METRICS_INTERVAL));
+            seatunnelReporter.set(reporterInterval, duration);
+        }
+
+        if (config.hasPath(CollectionConstants.METRICS_PORT)) {
+            seatunnelReporter.set(reporterConfigPort, config.getString(CollectionConstants.METRICS_PORT));
+        }
+
+        if (config.hasPath(CollectionConstants.METRICS_HOST)) {
+            seatunnelReporter.set(reporterConfigHost, config.getString(CollectionConstants.METRICS_HOST));
+        }
+
+        if (config.hasPath(CollectionConstants.METRICS_JOB_NAME)) {
+            seatunnelReporter.set(reporterConfigJobName, config.getString(CollectionConstants.METRICS_JOB_NAME));
+        }
+        seatunnelReporter.set(reporterConfigReporterName, config.getString(CollectionConstants.METRICS_CLASS));
+        return seatunnelReporter;
     }
 
 }
